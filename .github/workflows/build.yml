@@ -8,87 +8,94 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # 必须用 macOS runner：arm64e 的 ABI 只有 Apple 的 clang 才能生成正确版本，
+    # 在 Ubuntu 上用系统 clang 编出来的 arm64e 会因指针认证 ABI 不匹配在真机上崩溃。
+    runs-on: macos-latest
+    timeout-minutes: 40
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 安装系统依赖
+      - name: 环境信息
         run: |
           set -x
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq make git curl xz-utils unzip fakeroot dpkg-dev \
-            libtinfo5 libncurses5 2>/dev/null || \
-          sudo apt-get install -y -qq make git curl xz-utils unzip fakeroot dpkg-dev libtinfo6 || true
-          dpkg --print-architecture
+          sw_vers
+          xcode-select -p
+          clang --version
+          xcrun --sdk iphoneos --show-sdk-path || true
 
       - name: 安装 roothide/theos
         run: |
           set -x
           bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)" || true
           if [ ! -d "$HOME/theos/makefiles" ]; then
-            echo "::warning::install-theos 没跑成，改用 git clone"
+            echo "::warning::install-theos 失败，改用 git clone"
             rm -rf "$HOME/theos"
             git clone --recursive --depth 1 https://github.com/roothide/theos.git "$HOME/theos"
           fi
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
-          ls "$HOME/theos" || true
+          ls "$HOME/theos"
 
-      - name: 确保有 iOS SDK
+      - name: 准备 SDK
         run: |
           set -x
           mkdir -p "$HOME/theos/sdks"
-          if [ -z "$(ls -A "$HOME/theos/sdks" 2>/dev/null)" ]; then
-            echo "::warning::theos 自带 SDK 为空，从 theos/sdks 补"
+          if [ -z "$(ls -A "$HOME/theos/sdks" 2>/dev/null | grep -v .keep)" ]; then
+            echo "::warning::theos 没带 SDK，从 theos/sdks 补"
             git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks || true
             cp -R /tmp/sdks/*.sdk "$HOME/theos/sdks/" 2>/dev/null || true
           fi
           echo "--- 可用 SDK ---"
-          ls "$HOME/theos/sdks" || true
-          echo "--- 可用 toolchain ---"
-          ls "$HOME/theos/toolchain" 2>/dev/null || echo "(无，将使用系统 clang)"
-          which clang || true
-          clang --version || true
+          ls "$HOME/theos/sdks"
+          echo "--- theos toolchain ---"
+          ls "$HOME/theos/toolchain" 2>/dev/null || echo "(无，用 Xcode 的 clang)"
 
-      # ---- 关卡 1：Stage1 必须编过，编不过整个 job 失败 ----
-      - name: 编译 Stage1（最小验证包）
+      # ---------------- Stage 1 ----------------
+      - name: 编译 Stage1（失败则整体失败）
         run: |
+          set -o pipefail
           cd stage1-hello
           make clean >/dev/null 2>&1 || true
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage1.log
-          exit ${PIPESTATUS[0]}
 
-      # ---- 下面两个允许失败，不影响 Stage1 的 deb 产出 ----
-      - name: 编译主插件（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee build.log
-          exit ${PIPESTATUS[0]}
-
+      # ---------------- 探针 ----------------
       - name: 编译探针（允许失败）
         if: always()
         continue-on-error: true
         run: |
+          set -o pipefail
           cd probe
           make clean >/dev/null 2>&1 || true
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../probe.log
-          exit ${PIPESTATUS[0]}
 
-      - name: 检查产物
+      # ---------------- 主插件 ----------------
+      - name: 编译主插件（允许失败）
+        if: always()
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          make clean >/dev/null 2>&1 || true
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee build.log
+
+      # ---------------- 产物检查 ----------------
+      - name: 检查产物（架构是否真的含 arm64e）
         if: always()
         run: |
-          echo "=== 所有 deb ==="
+          echo "=== 找到的 deb ==="
           find . -name "*.deb" -print || true
           echo
           for d in $(find . -name "*.deb"); do
             echo "--- $d ---"
-            dpkg-deb -I "$d" 2>/dev/null | head -20 || true
-            echo "文件列表:"
-            dpkg-deb -c "$d" 2>/dev/null | head -20 || true
-            echo
+            # macOS runner 没有 dpkg-deb，用 ar 拆包看 control
+            cd "$(dirname "$d")"
+            ar -x "$(basename "$d")" 2>/dev/null && ls -1 | head || true
+            cd - >/dev/null
+          done
+          echo
+          echo "=== 检查 dylib 架构 ==="
+          for f in $(find . -name "*.dylib" -path "*obj*" 2>/dev/null); do
+            echo "--- $f ---"
+            xcrun lipo -info "$f" 2>/dev/null || lipo -info "$f" 2>/dev/null || file "$f"
           done
 
       - name: 上传 deb
@@ -102,7 +109,7 @@ jobs:
             probe/packages/*.deb
           if-no-files-found: warn
 
-      - name: 上传编译日志
+      - name: 上传日志
         if: always()
         uses: actions/upload-artifact@v4
         with:
