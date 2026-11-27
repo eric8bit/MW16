@@ -1,22 +1,21 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <string.h>
 
-// MW16 Stage 3 —— 启动 App → 等 scene → 建图层容器 → 浮窗
+// MW16 Stage 3 v2 —— 为什么 layers=-1
 //
-//  v3 日志确认的事实：
-//    - enumerateScenesWithBlock: 存在且可用
-//    - 场景 id 形如 "sceneID:com.apple.xxx-default"
-//  因此必须先把 App 跑起来，等它的 scene 出现且 layers>0，才可能出画面。
+//  v1 现象：scene=Y（场景确实出现了），但 layers 一直是 -1。
+//  -1 表示 LayerCount() 里某一步 respondsToSelector 失败：
+//    要么 FBScene 没有 layerManager，要么 layerManager 没有 layers，
+//    要么 layers 不是 NSArray。
+//  这一版直接把真实的方法名/ivar 名打出来。
 
 #define S3_LOG @"/var/mobile/Media/mw16_stage3.log"
 
 static NSMutableString *gOut = nil;
 static UITextView *gTrace = nil;
 static UIWindow *gPanelWin = nil;
-static UIWindow *gFloatWin = nil;
-
-// ---------- 基础 ----------
 
 static void A(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
@@ -25,12 +24,10 @@ static void A(NSString *fmt, ...) {
     if (!gOut) gOut = [NSMutableString string];
     [gOut appendFormat:@"%@\n", s];
     NSLog(@"[MW16-S3] %@", s);
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (gTrace) gTrace.text = gOut;
-    });
+    dispatch_async(dispatch_get_main_queue(), ^{ if (gTrace) gTrace.text = gOut; });
 }
 
-static void FlushLog(void) {
+static void Flush(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         @try { [gOut writeToFile:S3_LOG atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
         @catch (NSException *e) {}
@@ -57,8 +54,6 @@ static UIWindow *MakeWindow(CGFloat level) {
     return w;
 }
 
-// ---------- 场景 ----------
-
 static id FBSceneMgr(void) {
     Class c = NSClassFromString(@"FBSceneManager");
     if (!c || ![c respondsToSelector:@selector(sharedInstance)]) return nil;
@@ -72,8 +67,7 @@ static NSArray *AllScenes(void) {
     SEL sel = NSSelectorFromString(@"enumerateScenesWithBlock:");
     if ([mgr respondsToSelector:sel]) {
         void (^b)(id) = ^(id s) { if (s) [out addObject:s]; };
-        @try { ((void (*)(id, SEL, id))objc_msgSend)(mgr, sel, b); }
-        @catch (NSException *e) {}
+        @try { ((void (*)(id, SEL, id))objc_msgSend)(mgr, sel, b); } @catch (NSException *e) {}
     }
     return out;
 }
@@ -93,195 +87,122 @@ static id SceneForBundle(NSString *bid) {
     return nil;
 }
 
-static int LayerCount(id scene) {
-    if (!scene || ![scene respondsToSelector:@selector(layerManager)]) return -1;
-    id lm = ((id (*)(id, SEL))objc_msgSend)(scene, @selector(layerManager));
-    if (!lm || ![lm respondsToSelector:@selector(layers)]) return -1;
-    id layers = ((id (*)(id, SEL))objc_msgSend)(lm, @selector(layers));
-    return [layers isKindOfClass:[NSArray class]] ? (int)[layers count] : -1;
-}
+// ---------- 方法/变量转储 ----------
 
-// ---------- 容器 ----------
-
-static UIView *BuildContainer(id scene, NSMutableString *r) {
-    if (!scene) { [r appendString:@"scene=nil"]; return nil; }
-    int n = LayerCount(scene);
-    [r appendFormat:@"layers=%d ", n];
-    if (n <= 0) { [r appendString:@"(无图层)"]; return nil; }
-
-    id lm = ((id (*)(id, SEL))objc_msgSend)(scene, @selector(layerManager));
-    id layers = ((id (*)(id, SEL))objc_msgSend)(lm, @selector(layers));
-
-    Class cc = NSClassFromString(@"_UISceneLayerHostContainerView");
-    if (!cc) { [r appendString:@"no containerClass"]; return nil; }
-
-    id container = nil;
-    @try {
-        if ([(id)cc instancesRespondToSelector:@selector(initWithScene:debugDescription:)]) {
-            container = ((id (*)(id, SEL, id, id))objc_msgSend)(
-                ((id (*)(id, SEL))objc_msgSend)((id)cc, @selector(alloc)),
-                @selector(initWithScene:debugDescription:), scene, @"MW16");
-            [r appendString:@"init=dbg "];
-        } else if ([(id)cc instancesRespondToSelector:@selector(initWithScene:)]) {
-            container = ((id (*)(id, SEL, id))objc_msgSend)(
-                ((id (*)(id, SEL))objc_msgSend)((id)cc, @selector(alloc)),
-                @selector(initWithScene:), scene);
-            [r appendString:@"init=basic "];
-        } else {
-            [r appendString:@"init=NONE"];
-            return nil;
+static void DumpSels(Class cls, const char *needle, int limit) {
+    if (!cls) { A(@"  (class nil)"); return; }
+    NSMutableArray *names = [NSMutableArray array];
+    for (Class c = cls; c && c != [NSObject class]; c = class_getSuperclass(c)) {
+        unsigned int n = 0;
+        Method *ms = class_copyMethodList(c, &n);
+        for (unsigned int i = 0; i < n; i++) {
+            const char *nm = sel_getName(method_getName(ms[i]));
+            if (!needle || strstr(nm, needle)) {
+                NSString *s = [NSString stringWithUTF8String:nm];
+                if (s && ![names containsObject:s]) [names addObject:s];
+            }
         }
-    } @catch (NSException *e) {
-        [r appendFormat:@"EXC:%@", e.reason];
-        return nil;
+        if (ms) free(ms);
     }
-    if (!container) { [r appendString:@"container=nil"]; return nil; }
-
-    UIView *cv = (UIView *)container;
-    if (CGRectIsEmpty(cv.frame)) cv.frame = CGRectMake(0, 0, 320, 560);
-
-    if (![container respondsToSelector:@selector(_createHostViewForLayer:)]) {
-        [r appendString:@"no _createHostViewForLayer"];
-        return nil;
-    }
-
-    int made = 0;
-    for (id layer in layers) {
-        @try {
-            UIView *hv = ((id (*)(id, SEL, id))objc_msgSend)(container, @selector(_createHostViewForLayer:), layer);
-            if (!hv) continue;
-            hv.frame = cv.bounds;
-            hv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-            [cv addSubview:hv];
-            made++;
-        } @catch (NSException *e) {}
-    }
-    [r appendFormat:@"hostViews=%d", made];
-    return (made > 0) ? cv : nil;
-}
-
-// ---------- 浮窗 ----------
-
-@interface S3CloseBar : UIButton
-@end
-
-@implementation S3CloseBar
-- (instancetype)initWithFrame:(CGRect)frame {
-    if ((self = [super initWithFrame:frame])) {
-        self.backgroundColor = [UIColor systemRedColor];
-        self.layer.cornerRadius = CGRectGetHeight(frame) / 2.0;
-        [self addTarget:self action:@selector(hideSelf) forControlEvents:UIControlEventTouchUpInside];
-    }
-    return self;
-}
-- (void)hideSelf {
-    if (gFloatWin) { gFloatWin.hidden = YES; gFloatWin = nil; }
-}
-@end
-
-static void CloseFloating(void) {
-    if (gFloatWin) { gFloatWin.hidden = YES; gFloatWin = nil; }
-}
-
-static void ShowFloating(UIView *cv) {
-    CloseFloating();
-
-    UIWindow *host = MakeWindow(UIWindowLevelAlert + 800);
-    host.backgroundColor = [UIColor clearColor];
-    UIViewController *vc = [UIViewController new];
-    vc.view.backgroundColor = [UIColor clearColor];
-    host.rootViewController = vc;
-
-    CGRect sb = [UIScreen mainScreen].bounds;
-    CGFloat w = sb.size.width * 0.62;
-    CGFloat h = w * 1.7;
-    if (h > sb.size.height * 0.72) h = sb.size.height * 0.72;
-
-    UIView *win = [[UIView alloc] initWithFrame:CGRectMake(sb.size.width - w - 14, 96, w, h)];
-    win.backgroundColor = [UIColor colorWithWhite:0.1 alpha:1.0];
-    win.layer.cornerRadius = 12;
-    win.layer.borderWidth = 1;
-    win.layer.borderColor = [[UIColor colorWithWhite:1 alpha:0.3] CGColor];
-    win.clipsToBounds = YES;
-    [vc.view addSubview:win];
-
-    UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, w, 26)];
-    bar.backgroundColor = [UIColor colorWithWhite:0.24 alpha:1.0];
-    [win addSubview:bar];
-
-    [bar addSubview:[[S3CloseBar alloc] initWithFrame:CGRectMake(8, 6, 52, 14)]];
-
-    cv.frame = CGRectMake(0, 26, w, h - 26);
-    cv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [win addSubview:cv];
-
-    host.hidden = NO;
-    gFloatWin = host;
-    A(@"浮窗已显示 %.0fx%.0f", w, h);
-}
-
-// ---------- 启动 App ----------
-
-static id SBAppFor(NSString *bid) {
-    Class ac = NSClassFromString(@"SBApplicationController");
-    if (!ac || ![ac respondsToSelector:@selector(sharedInstance)]) return nil;
-    id ctrl = ((id (*)(id, SEL))objc_msgSend)((id)ac, @selector(sharedInstance));
-    SEL sel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
-    if (!ctrl || ![ctrl respondsToSelector:sel]) return nil;
-    return ((id (*)(id, SEL, id))objc_msgSend)(ctrl, sel, bid);
-}
-
-static void LaunchApp(NSString *bid) {
-    id app = [UIApplication sharedApplication];
-    SEL sel = NSSelectorFromString(@"launchApplicationWithIdentifier:suspended:");
-    if (app && [app respondsToSelector:sel]) {
-        @try { ((void (*)(id, SEL, id, BOOL))objc_msgSend)(app, sel, bid, YES); }
-        @catch (NSException *e) {}
+    if (!names.count) { A(@"  (无匹配 %s)", needle ? needle : "*"); return; }
+    [names sortUsingSelector:@selector(compare:)];
+    int i = 0;
+    for (NSString *s in names) {
+        if (i++ >= limit) { A(@"  ... 共 %lu 个", (unsigned long)names.count); break; }
+        A(@"  -%@", s);
     }
 }
 
-static void OpenBundle(NSString *bid) {
-    if (!bid.length) return;
+static void DumpIvars(Class cls) {
+    if (!cls) { A(@"  (class nil)"); return; }
+    unsigned int n = 0;
+    Ivar *ivs = class_copyIvarList(cls, &n);
+    for (unsigned int i = 0; i < n; i++) A(@"  @%s", ivar_getName(ivs[i]));
+    if (ivs) free(ivs);
+    if (n == 0) A(@"  (无 ivar)");
+}
 
-    id app = SBAppFor(bid);
-    BOOL running = NO;
-    if (app && [app respondsToSelector:@selector(isRunning)])
-        running = ((BOOL (*)(id, SEL))objc_msgSend)(app, @selector(isRunning));
+// 从一个对象里按名字取 ivar（沿继承链）
+static id GetIvar(id obj, const char *name) {
+    if (!obj || !name) return nil;
+    for (Class c = object_getClass(obj); c; c = class_getSuperclass(c)) {
+        Ivar iv = class_getInstanceVariable(c, name);
+        if (iv) return (__bridge id)(*(void **)((__bridge void *)obj + ivar_getOffset(iv)));
+    }
+    return nil;
+}
 
-    A(@"== %@ ==", bid);
-    A(@"app=%@ running=%d", app ? @"ok" : @"nil", running);
+static void DumpSceneLayers(NSString *bid) {
+    [gOut setString:@""];
+    A(@"iOS %@", [[UIDevice currentDevice] systemVersion]);
+    A(@"");
 
-    LaunchApp(bid);
-    FlushLog();
+    id scene = SceneForBundle(bid);
+    A(@"scene for %@ = %@", bid, scene ? @"FOUND" : @"NIL");
+    if (!scene) { Flush(); return; }
 
-    __block int tries = 0;
-    __block dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-                                                             dispatch_get_main_queue());
-    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 0),
-                              500 * NSEC_PER_MSEC, 50 * NSEC_PER_MSEC);
-    dispatch_source_set_event_handler(timer, ^{
-        tries++;
-        id scene = SceneForBundle(bid);
-        int lc = scene ? LayerCount(scene) : -1;
+    Class sc = object_getClass(scene);
+    A(@"scene class = %@", NSStringFromClass(sc));
+    A(@"");
 
-        if (tries % 4 == 1) A(@"[%d] scene=%@ layers=%d", tries, scene ? @"Y" : @"N", lc);
+    A(@"[A] FBScene 里含 layer 的方法：");
+    DumpSels(sc, "layer", 20);
+    A(@"    Layer");
+    DumpSels(sc, "Layer", 20);
+    A(@"");
 
-        if (scene && lc > 0) {
-            dispatch_source_cancel(timer);
-            NSMutableString *r = [NSMutableString string];
-            UIView *cv = BuildContainer(scene, r);
-            A(@"build: %@ -> %@", r, cv ? @"OK" : @"FAIL");
-            if (cv) { ShowFloating(cv); if (gPanelWin) { gPanelWin.hidden = YES; } }
-            FlushLog();
-            return;
+    A(@"[B] FBScene 的 ivar：");
+    DumpIvars(sc);
+    A(@"");
+
+    // 尝试几种取 layerManager 的写法
+    A(@"[C] respondsToSelector 检查：");
+    A(@"  layerManager      = %d", [scene respondsToSelector:@selector(layerManager)]);
+    A(@"  _layerManager     = %d", [scene respondsToSelector:NSSelectorFromString(@"_layerManager")]);
+    A(@"  layerHost         = %d", [scene respondsToSelector:NSSelectorFromString(@"layerHost")]);
+    A(@"");
+
+    id lm = nil;
+    if ([scene respondsToSelector:@selector(layerManager)]) {
+        @try { lm = ((id (*)(id, SEL))objc_msgSend)(scene, @selector(layerManager)); }
+        @catch (NSException *e) { A(@"layerManager EXC %@", e.reason); }
+    }
+    if (!lm) lm = GetIvar(scene, "_layerManager");
+    A(@"layerManager 实例 = %@ (%@)", lm ? @"OK" : @"NIL", lm ? NSStringFromClass([lm class]) : @"-");
+
+    if (lm) {
+        Class lmc = object_getClass(lm);
+        A(@"");
+        A(@"[D] layerManager 里含 layer 的方法：");
+        DumpSels(lmc, "layer", 25);
+        A(@"");
+        A(@"[E] layerManager 的 ivar：");
+        DumpIvars(lmc);
+        A(@"");
+
+        A(@"[F] 尝试读图层：");
+        A(@"  responds layers   = %d", [lm respondsToSelector:@selector(layers)]);
+        A(@"  responds _layers  = %d", [lm respondsToSelector:NSSelectorFromString(@"_layers")]);
+
+        for (NSString *sel in @[@"layers", @"_layers", @"allLayers"]) {
+            SEL s = NSSelectorFromString(sel);
+            if (![lm respondsToSelector:s]) { A(@"  %@ -> 不存在", sel); continue; }
+            @try {
+                id v = ((id (*)(id, SEL))objc_msgSend)(lm, s);
+                A(@"  %@ -> %@ (%lu)", sel, v ? NSStringFromClass([v class]) : @"nil",
+                  (unsigned long)([v respondsToSelector:@selector(count)] ? [v count] : 0));
+            } @catch (NSException *e) { A(@"  %@ EXC %@", sel, e.reason); }
         }
-        if (tries >= 24) {
-            dispatch_source_cancel(timer);
-            A(@"超时 12s：没等到 %@ 的图层", bid);
-            FlushLog();
+
+        // 从 ivar 里翻
+        for (NSString *ivn in @[@"_layers", @"_layerMap", @"_layersByIdentifier"]) {
+            id v = GetIvar(lm, [ivn UTF8String]);
+            if (v) A(@"  ivar %@ -> %@ (%lu)", ivn, NSStringFromClass([v class]),
+                     (unsigned long)([v respondsToSelector:@selector(count)] ? [v count] : 0));
         }
-    });
-    dispatch_resume(timer);
+    }
+
+    Flush();
 }
 
 // ---------- 面板 ----------
@@ -299,9 +220,9 @@ static void OpenBundle(NSString *bid) {
     CGRect sb = [UIScreen mainScreen].bounds;
 
     UILabel *h = [[UILabel alloc] initWithFrame:CGRectMake(12, 46, sb.size.width - 90, 28)];
-    h.text = @"MW16 Stage 3";
+    h.text = @"MW16 Stage 3 · 图层探测";
     h.textColor = [UIColor whiteColor];
-    h.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
+    h.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
     [self.view addSubview:h];
 
     UIButton *x = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -312,74 +233,56 @@ static void OpenBundle(NSString *bid) {
     [self.view addSubview:x];
 
     self.field = [[UITextField alloc] initWithFrame:CGRectMake(12, 80, sb.size.width - 100, 34)];
-    self.field.placeholder = @"bundle id，例如 com.tencent.xin";
+    self.field.placeholder = @"bundle id";
     self.field.borderStyle = UITextBorderStyleRoundedRect;
     self.field.autocapitalizationType = UITextAutocapitalizationTypeNone;
     self.field.autocorrectionType = UITextAutocorrectionTypeNo;
     self.field.delegate = self;
     self.field.textColor = [UIColor whiteColor];
     self.field.backgroundColor = [UIColor colorWithWhite:0.18 alpha:1.0];
+    self.field.text = @"tv.danmaku.bilianime";
     [self.view addSubview:self.field];
 
     UIButton *go = [UIButton buttonWithType:UIButtonTypeSystem];
     go.frame = CGRectMake(sb.size.width - 82, 80, 70, 34);
-    [go setTitle:@"打开" forState:UIControlStateNormal];
+    [go setTitle:@"探测" forState:UIControlStateNormal];
     go.backgroundColor = [UIColor systemBlueColor];
     [go setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     go.layer.cornerRadius = 8;
     [go addTarget:self action:@selector(goTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:go];
 
-    UIButton *ls = [UIButton buttonWithType:UIButtonTypeSystem];
-    ls.frame = CGRectMake(12, 120, 120, 28);
-    [ls setTitle:@"列出当前场景" forState:UIControlStateNormal];
-    ls.titleLabel.font = [UIFont systemFontOfSize:12];
-    [ls addTarget:self action:@selector(listScenes) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:ls];
-
-    self.trace = [[UITextView alloc] initWithFrame:CGRectMake(0, 152, sb.size.width, sb.size.height - 170)];
+    self.trace = [[UITextView alloc] initWithFrame:CGRectMake(0, 124, sb.size.width, sb.size.height - 142)];
     self.trace.backgroundColor = [UIColor colorWithWhite:0.10 alpha:1.0];
     self.trace.textColor = [UIColor colorWithRed:0.45 green:1.0 blue:0.55 alpha:1.0];
-    self.trace.font = [UIFont fontWithName:@"Menlo" size:10] ?: [UIFont systemFontOfSize:10];
+    self.trace.font = [UIFont fontWithName:@"Menlo" size:9] ?: [UIFont systemFontOfSize:9];
     self.trace.editable = NO;
     [self.view addSubview:self.trace];
     gTrace = self.trace;
 
     if (!gOut) gOut = [NSMutableString string];
-    [gOut setString:@""];
-    A(@"就绪：输入 bundle id 后点「打开」。");
+    A(@"输入 bundle id 后点「探测」。");
+    A(@"注意：目标 App 需要先在后台跑着（先手动打开它再回来）。");
 }
 
-- (void)hidePanel {
-    if (gPanelWin) { gPanelWin.hidden = YES; gPanelWin = nil; }
-}
+- (void)hidePanel { if (gPanelWin) { gPanelWin.hidden = YES; gPanelWin = nil; } }
 
-- (BOOL)textFieldShouldReturn:(UITextField *)tf {
-    [tf resignFirstResponder];
-    [self goTapped];
-    return YES;
-}
+- (BOOL)textFieldShouldReturn:(UITextField *)tf { [tf resignFirstResponder]; [self goTapped]; return YES; }
 
 - (void)goTapped {
     NSString *bid = [self.field.text stringByTrimmingCharactersInSet:
                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (!bid.length) { A(@"先输入 bundle id"); return; }
     [self.field resignFirstResponder];
-    OpenBundle(bid);
-}
-
-- (void)listScenes {
-    NSArray *all = AllScenes();
-    A(@"--- 当前 %lu 个场景 ---", (unsigned long)all.count);
-    for (id s in all) A(@"  %@  layers=%d", SceneID(s) ?: @"?", LayerCount(s));
-    FlushLog();
+    if (!gOut) gOut = [NSMutableString string];
+    DumpSceneLayers(bid);
 }
 
 @end
 
 static void ShowPanel(void) {
     UIWindow *w = MakeWindow(UIWindowLevelAlert + 900);
-    w.backgroundColor = [UIColor colorWithWhite:0 alpha:0.9];
+    w.backgroundColor = [UIColor colorWithWhite:0 alpha:0.92];
     S3Panel *p = [S3Panel new];
     w.rootViewController = p;
     w.hidden = NO;
