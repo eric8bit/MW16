@@ -239,10 +239,14 @@ static void MWRunProbe(void) {
 %end
 
 %ctor {
-    @autoreleasepool {
-        gProbeQ = dispatch_queue_create("mw16.probe.log", DISPATCH_QUEUE_SERIAL);
-        gProbeBuf = [NSMutableString string];
-        [gProbeBuf appendString:[NSString stringWithFormat:@"\n===== MW16 probe %@ =====\n", [NSDate date]]];
-    }
+    // 不在加载期碰 NSString/NSDate/文件系统——加载期崩溃会直接把 SpringBoard 带进安全模式。
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!gProbeQ) gProbeQ = dispatch_queue_create("mw16.probe.log", DISPATCH_QUEUE_SERIAL);
+        if (!gProbeBuf) gProbeBuf = [NSMutableString string];
+        if (gProbeBuf.length == 0) {
+            [gProbeBuf appendString:[NSString stringWithFormat:@"\n===== MW16 probe %@ =====\n", [NSDate date]]];
+        }
+    });
     %init;   // 自定义 %ctor 必须手动初始化，否则 hook 不生效
 }
