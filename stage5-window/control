@@ -1,0 +1,9 @@
+Package: com.mw16.stage5
+Name: MW16 Stage5 Window
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Stage 5 - keep scene alive when backgrounded, multiple windows.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)
