@@ -134,11 +134,14 @@ static void S1ShowPanel(void) {
 %end
 
 %ctor {
-    @autoreleasepool {
+    // 只做最小动作：不在 dylib 初始化阶段碰 NSString/文件系统/UI。
+    // 这些延迟到主队列再跑，避免任何"加载期崩溃"。
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
         S1Write(@"LOAD dylib loaded");
-        // 万一注入晚于 SpringBoard 启动，didFinishLaunching 不会再触发，这条兜底
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ S1ShowPanel(); });
-    }
+    });
+    // 兜底：注入晚于 SpringBoard 启动时 didFinishLaunching 不会再触发，靠这条挂面板
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ S1ShowPanel(); });
     %init;
 }
