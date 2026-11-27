@@ -1,0 +1,9 @@
+Package: com.mw16.stage3
+Name: MW16 Stage3 Window
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Stage 3 - launch app, wait for its FBScene layers, host them in a floating window.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)
