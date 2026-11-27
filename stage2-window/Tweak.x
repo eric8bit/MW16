@@ -35,6 +35,7 @@ static void Flush(NSString *path) {
 static UIView *BuildContainer(id scene, NSMutableString *r);
 static void ShowFloating(UIView *cv);
 
+static UIWindowScene *ActiveScene(void) {
     UIWindowScene *fallback = nil;
     for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
         if (![s isKindOfClass:[UIWindowScene class]]) continue;
