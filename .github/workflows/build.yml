@@ -78,6 +78,16 @@ jobs:
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee build.log
 
       # ---------------- 产物检查 ----------------
+      # ---------------- Stage 2 ----------------
+      - name: 编译 Stage2（允许失败）
+        if: always()
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cd stage2-window
+          make clean >/dev/null 2>&1 || true
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage2.log
+
       - name: 检查产物（架构是否真的含 arm64e）
         if: always()
         run: |
@@ -107,6 +117,7 @@ jobs:
             packages/*.deb
             stage1-hello/packages/*.deb
             probe/packages/*.deb
+            stage2-window/packages/*.deb
           if-no-files-found: warn
 
       - name: 上传日志
@@ -118,4 +129,5 @@ jobs:
             stage1.log
             build.log
             probe.log
+            stage2.log
           if-no-files-found: ignore
