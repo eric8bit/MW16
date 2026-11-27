@@ -41,14 +41,6 @@ static void MWAppendLog(NSString *line) {
     MWAppendLog(__l); \
 } while (0)
 
-static id MWIvar(id obj, const char *name) {
-    if (!obj || !name) return nil;
-    for (Class c = object_getClass(obj); c; c = class_getSuperclass(c)) {
-        Ivar iv = class_getInstanceVariable(c, name);
-        if (iv) return (__bridge id)(*(void **)((__bridge void *)obj + ivar_getOffset(iv)));
-    }
-    return nil;
-}
 
 static void MWDumpSelectors(Class cls, const char *needle, const char *tag) {
     if (!cls) { PLOG("%s: CLASS MISSING", tag); return; }
