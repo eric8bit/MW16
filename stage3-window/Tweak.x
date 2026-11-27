@@ -3,19 +3,20 @@
 #import <objc/message.h>
 #import <string.h>
 
-// MW16 Stage 3 v2 —— 为什么 layers=-1
+// MW16 Stage 3 v3
 //
-//  v1 现象：scene=Y（场景确实出现了），但 layers 一直是 -1。
-//  -1 表示 LayerCount() 里某一步 respondsToSelector 失败：
-//    要么 FBScene 没有 layerManager，要么 layerManager 没有 layers，
-//    要么 layers 不是 NSArray。
-//  这一版直接把真实的方法名/ivar 名打出来。
+//  v2 的问题：要求你先手动打开 App，但等你回到桌面时 App 可能已被系统回收，
+//  于是 scene for ... = NIL，什么都探不到。
+//
+//  v3 改成一键完成：自动启动 App → 轮询 scene → 抓到就立刻 dump。
 
 #define S3_LOG @"/var/mobile/Media/mw16_stage3.log"
 
 static NSMutableString *gOut = nil;
 static UITextView *gTrace = nil;
 static UIWindow *gPanelWin = nil;
+static dispatch_source_t gPollTimer = nil;
+static int gPollCount = 0;
 
 static void A(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
@@ -87,8 +88,6 @@ static id SceneForBundle(NSString *bid) {
     return nil;
 }
 
-// ---------- 方法/变量转储 ----------
-
 static void DumpSels(Class cls, const char *needle, int limit) {
     if (!cls) { A(@"  (class nil)"); return; }
     NSMutableArray *names = [NSMutableArray array];
@@ -122,7 +121,6 @@ static void DumpIvars(Class cls) {
     if (n == 0) A(@"  (无 ivar)");
 }
 
-// 从一个对象里按名字取 ivar（沿继承链）
 static id GetIvar(id obj, const char *name) {
     if (!obj || !name) return nil;
     for (Class c = object_getClass(obj); c; c = class_getSuperclass(c)) {
@@ -132,34 +130,31 @@ static id GetIvar(id obj, const char *name) {
     return nil;
 }
 
-static void DumpSceneLayers(NSString *bid) {
-    [gOut setString:@""];
-    A(@"iOS %@", [[UIDevice currentDevice] systemVersion]);
-    A(@"");
-
-    id scene = SceneForBundle(bid);
-    A(@"scene for %@ = %@", bid, scene ? @"FOUND" : @"NIL");
-    if (!scene) { Flush(); return; }
+static void DumpScene(id scene) {
+    if (!scene) { A(@"scene = NIL"); return; }
 
     Class sc = object_getClass(scene);
+    A(@"");
     A(@"scene class = %@", NSStringFromClass(sc));
+    A(@"scene id    = %@", SceneID(scene) ?: @"?");
     A(@"");
 
     A(@"[A] FBScene 里含 layer 的方法：");
-    DumpSels(sc, "layer", 20);
-    A(@"    Layer");
-    DumpSels(sc, "Layer", 20);
+    DumpSels(sc, "layer", 25);
+    A(@"  含 Layer：");
+    DumpSels(sc, "Layer", 25);
     A(@"");
 
     A(@"[B] FBScene 的 ivar：");
     DumpIvars(sc);
     A(@"");
 
-    // 尝试几种取 layerManager 的写法
-    A(@"[C] respondsToSelector 检查：");
-    A(@"  layerManager      = %d", [scene respondsToSelector:@selector(layerManager)]);
-    A(@"  _layerManager     = %d", [scene respondsToSelector:NSSelectorFromString(@"_layerManager")]);
-    A(@"  layerHost         = %d", [scene respondsToSelector:NSSelectorFromString(@"layerHost")]);
+    A(@"[C] 关键 selector 存在性：");
+    static const char *sels[] = {"layerManager", "_layerManager", "layerHost", "layers",
+                                  "sceneLayerManager", "identifier"};
+    for (int i = 0; i < 6; i++) {
+        A(@"  %s = %d", sels[i], [scene respondsToSelector:NSSelectorFromString([NSString stringWithUTF8String:sels[i]])]);
+    }
     A(@"");
 
     id lm = nil;
@@ -168,23 +163,19 @@ static void DumpSceneLayers(NSString *bid) {
         @catch (NSException *e) { A(@"layerManager EXC %@", e.reason); }
     }
     if (!lm) lm = GetIvar(scene, "_layerManager");
-    A(@"layerManager 实例 = %@ (%@)", lm ? @"OK" : @"NIL", lm ? NSStringFromClass([lm class]) : @"-");
+    A(@"[D] layerManager = %@ (%@)", lm ? @"OK" : @"NIL", lm ? NSStringFromClass([lm class]) : @"-");
 
     if (lm) {
         Class lmc = object_getClass(lm);
         A(@"");
-        A(@"[D] layerManager 里含 layer 的方法：");
+        A(@"[E] layerManager 含 layer 的方法：");
         DumpSels(lmc, "layer", 25);
         A(@"");
-        A(@"[E] layerManager 的 ivar：");
+        A(@"[F] layerManager 的 ivar：");
         DumpIvars(lmc);
         A(@"");
-
-        A(@"[F] 尝试读图层：");
-        A(@"  responds layers   = %d", [lm respondsToSelector:@selector(layers)]);
-        A(@"  responds _layers  = %d", [lm respondsToSelector:NSSelectorFromString(@"_layers")]);
-
-        for (NSString *sel in @[@"layers", @"_layers", @"allLayers"]) {
+        A(@"[G] 尝试读：");
+        for (NSString *sel in @[@"layers", @"_layers", @"allLayers", @"sceneLayers"]) {
             SEL s = NSSelectorFromString(sel);
             if (![lm respondsToSelector:s]) { A(@"  %@ -> 不存在", sel); continue; }
             @try {
@@ -193,19 +184,64 @@ static void DumpSceneLayers(NSString *bid) {
                   (unsigned long)([v respondsToSelector:@selector(count)] ? [v count] : 0));
             } @catch (NSException *e) { A(@"  %@ EXC %@", sel, e.reason); }
         }
-
-        // 从 ivar 里翻
         for (NSString *ivn in @[@"_layers", @"_layerMap", @"_layersByIdentifier"]) {
             id v = GetIvar(lm, [ivn UTF8String]);
             if (v) A(@"  ivar %@ -> %@ (%lu)", ivn, NSStringFromClass([v class]),
                      (unsigned long)([v respondsToSelector:@selector(count)] ? [v count] : 0));
         }
     }
-
     Flush();
 }
 
-// ---------- 面板 ----------
+static void LaunchApp(NSString *bid) {
+    id app = [UIApplication sharedApplication];
+    SEL sel = NSSelectorFromString(@"launchApplicationWithIdentifier:suspended:");
+    if (app && [app respondsToSelector:sel]) {
+        @try { ((void (*)(id, SEL, id, BOOL))objc_msgSend)(app, sel, bid, YES); }
+        @catch (NSException *e) {}
+    }
+}
+
+static void StopPoll(void) {
+    if (gPollTimer) { dispatch_source_cancel(gPollTimer); gPollTimer = nil; }
+}
+
+static void StartProbe(NSString *bid) {
+    StopPoll();
+    if (!gOut) gOut = [NSMutableString string];
+    [gOut setString:@""];
+
+    A(@"目标: %@", bid);
+    A(@"正在启动 App ...");
+    LaunchApp(bid);
+    gPollCount = 0;
+
+    gPollTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(gPollTimer, dispatch_time(DISPATCH_TIME_NOW, 0), 400 * NSEC_PER_MSEC, 50 * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(gPollTimer, ^{
+        gPollCount++;
+        id scene = SceneForBundle(bid);
+
+        if (gPollCount % 5 == 1) A(@"[%d] 找 scene ... %@", gPollCount, scene ? @"找到" : @"还没有");
+
+        if (scene) {
+            A(@"[%d] 拿到 scene，开始探测", gPollCount);
+            StopPoll();
+            DumpScene(scene);
+            return;
+        }
+        if (gPollCount >= 50) {   // 20 秒
+            StopPoll();
+            A(@"超时 20s：还没看到 %@ 的 scene", bid);
+            A(@"当前所有场景：");
+            for (id s in AllScenes()) A(@"  %@", SceneID(s) ?: @"?");
+            A(@"");
+            A(@"可能原因：App 启动失败 / bundle id 不对 / 应用被系统拦截");
+            Flush();
+        }
+    });
+    dispatch_resume(gPollTimer);
+}
 
 @interface S3Panel : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *field;
@@ -220,7 +256,7 @@ static void DumpSceneLayers(NSString *bid) {
     CGRect sb = [UIScreen mainScreen].bounds;
 
     UILabel *h = [[UILabel alloc] initWithFrame:CGRectMake(12, 46, sb.size.width - 90, 28)];
-    h.text = @"MW16 Stage 3 · 图层探测";
+    h.text = @"MW16 Stage3 · 图层探测";
     h.textColor = [UIColor whiteColor];
     h.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
     [self.view addSubview:h];
@@ -245,9 +281,10 @@ static void DumpSceneLayers(NSString *bid) {
 
     UIButton *go = [UIButton buttonWithType:UIButtonTypeSystem];
     go.frame = CGRectMake(sb.size.width - 82, 80, 70, 34);
-    [go setTitle:@"探测" forState:UIControlStateNormal];
+    [go setTitle:@"启动+探测" forState:UIControlStateNormal];
     go.backgroundColor = [UIColor systemBlueColor];
     [go setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    go.titleLabel.font = [UIFont systemFontOfSize:12];
     go.layer.cornerRadius = 8;
     [go addTarget:self action:@selector(goTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:go];
@@ -261,8 +298,7 @@ static void DumpSceneLayers(NSString *bid) {
     gTrace = self.trace;
 
     if (!gOut) gOut = [NSMutableString string];
-    A(@"输入 bundle id 后点「探测」。");
-    A(@"注意：目标 App 需要先在后台跑着（先手动打开它再回来）。");
+    A(@"点「启动+探测」：会自动打开 App 并等待它的 scene。");
 }
 
 - (void)hidePanel { if (gPanelWin) { gPanelWin.hidden = YES; gPanelWin = nil; } }
@@ -274,8 +310,7 @@ static void DumpSceneLayers(NSString *bid) {
                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (!bid.length) { A(@"先输入 bundle id"); return; }
     [self.field resignFirstResponder];
-    if (!gOut) gOut = [NSMutableString string];
-    DumpSceneLayers(bid);
+    StartProbe(bid);
 }
 
 @end
