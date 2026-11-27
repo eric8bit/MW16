@@ -1,5 +1,5 @@
 export THEOS_PACKAGE_SCHEME = roothide
-export ARCHS = arm64 arm64e
+export ARCHS = arm64
 export TARGET = iphone:clang:16.5:15.0
 export DEBUG = 0
 
