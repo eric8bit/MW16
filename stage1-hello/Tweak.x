@@ -2,27 +2,29 @@
 #import <objc/runtime.h>
 
 // ---------------------------------------------------------------------------
-//  MW16 Stage 1 — "Hello"
+//  MW16 Stage 1 v2 —— 可见诊断版
 //
-//  目的：只验证三件事，不做任何危险操作。
-//    1. roothide 包能不能编出来、装上
-//    2. dylib 能不能注入 SpringBoard
-//    3. 我们能不能在桌面上画一个自己的按钮
+//  改动：不再依赖"日志文件"来判断是否注入成功。
+//  注入成功 → 屏幕正中会出现一块深色面板，写着 MW16 OK 和系统信息。
+//  注入失败 → 什么都不会出现（和 v1 一样看不到任何东西）。
 //
-//  不 hook 任何私有 API（只 hook 公开存在的 applicationDidFinishLaunching:），
-//  不改任何系统设置。最坏结果就是按钮不出现。
+//  同时把日志写到 4 个位置，尽量保证至少有一个能写成功。
+//  不 hook 任何私有 API，不改任何系统设置。
 // ---------------------------------------------------------------------------
 
-#define S1_LOG      @"/var/mobile/Library/Preferences/mw16_stage1.log"
-#define S1_LOG_ALT  @"/tmp/mw16_stage1.log"
-
-static int gAttachAttempts = 0;
-static const int kMaxAttachAttempts = 40;
+static NSArray<NSString *> *S1LogPaths(void) {
+    return @[
+        @"/var/mobile/Library/Preferences/mw16_stage1.log",
+        @"/var/mobile/Media/mw16_stage1.log",
+        @"/var/tmp/mw16_stage1.log",
+        @"/tmp/mw16_stage1.log",
+    ];
+}
 
 static void S1Write(NSString *line) {
     NSLog(@"[MW16-S1] %@", line);
     NSString *full = [NSString stringWithFormat:@"%@  %@\n", [[NSDate date] description], line];
-    for (NSString *path in @[S1_LOG, S1_LOG_ALT]) {
+    for (NSString *path in S1LogPaths()) {
         @try {
             NSString *old = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
             if (!old) old = @"";
@@ -36,144 +38,107 @@ static void S1Write(NSString *line) {
 - (void)applicationDidFinishLaunching:(id)application;
 @end
 
-// 找一个可以挂子视图的窗口。逐级降级，绝不返回 nil 就无限重试。
-static UIWindow *S1FindHostWindow(void) {
+// 找桌面窗口（只用于报告，不影响主面板）
+static NSString *S1HomeWindowInfo(void) {
+    Class homeClass = NSClassFromString(@"SBHomeScreenWindow");
     UIApplication *app = [UIApplication sharedApplication];
-
-    // 1) 桌面窗口（最理想）
-    Class homeWindowClass = NSClassFromString(@"SBHomeScreenWindow");
-    if (homeWindowClass) {
-        for (UIScene *scene in app.connectedScenes) {
-            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
-                if ([w isKindOfClass:homeWindowClass] && !CGRectIsEmpty(w.bounds)) return w;
+    for (UIScene *scene in app.connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            if (homeClass && [w isKindOfClass:homeClass]) {
+                return [NSString stringWithFormat:@"%@ %.0fx%.0f",
+                        NSStringFromClass([w class]), w.bounds.size.width, w.bounds.size.height];
             }
         }
-        for (UIWindow *w in app.windows) {
-            if ([w isKindOfClass:homeWindowClass] && !CGRectIsEmpty(w.bounds)) return w;
-        }
     }
-
-    // 2) 退而求其次：任何 normal 层级的窗口
-    for (UIWindow *w in app.windows) {
-        if (w.windowLevel == UIWindowLevelNormal && !CGRectIsEmpty(w.bounds) && !w.hidden) return w;
-    }
-
-    // 3) 最后：key window
-    UIWindow *key = nil;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in app.connectedScenes) {
-            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
-                if (w.isKeyWindow) { key = w; break; }
-            }
-            if (key) break;
-        }
-    }
-    return key;
+    return @"(not found)";
 }
 
-@interface S1Button : UIView
+static UIWindow *gPanelWindow = nil;
+
+// 独立窗口画面板：不依赖桌面窗口是否找到，最不容易被别的东西盖住
+static void S1ShowPanel(void) {
+    if (gPanelWindow) { gPanelWindow.hidden = NO; return; }
+
+    UIApplication *app = [UIApplication sharedApplication];
+    UIWindowScene *ws = nil;
+    for (UIScene *s in app.connectedScenes) {
+        if (![s isKindOfClass:[UIWindowScene class]]) continue;
+        if (s.activationState == UISceneActivationStateForegroundActive) { ws = (UIWindowScene *)s; break; }
+        if (!ws) ws = (UIWindowScene *)s;
+    }
+
+    UIWindow *win = ws ? [[UIWindow alloc] initWithWindowScene:ws]
+                       : [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    win.frame = [UIScreen mainScreen].bounds;
+    win.windowLevel = UIWindowLevelAlert + 900;
+    win.backgroundColor = [UIColor clearColor];
+
+    UIViewController *vc = [UIViewController new];
+    vc.view.backgroundColor = [UIColor clearColor];
+    win.rootViewController = vc;
+
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 300, 150)];
+    card.center = CGPointMake(CGRectGetMidX(win.bounds), CGRectGetMidY(win.bounds));
+    card.backgroundColor = [UIColor colorWithRed:0.10 green:0.45 blue:0.95 alpha:1.0];
+    card.layer.cornerRadius = 18;
+    card.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin |
+                            UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+    [vc.view addSubview:card];
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 18, 268, 34)];
+    title.text = @"MW16 注入成功";
+    title.textColor = [UIColor whiteColor];
+    title.textAlignment = NSTextAlignmentCenter;
+    title.font = [UIFont systemFontOfSize:22 weight:UIFontWeightHeavy];
+    [card addSubview:title];
+
+    NSString *detail = [NSString stringWithFormat:@"iOS %@\nhome: %@\narm64e dylib loaded",
+                        [[UIDevice currentDevice] systemVersion], S1HomeWindowInfo()];
+    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(16, 54, 268, 70)];
+    sub.text = detail;
+    sub.numberOfLines = 4;
+    sub.textAlignment = NSTextAlignmentCenter;
+    sub.textColor = [UIColor colorWithWhite:0.92 alpha:1.0];
+    sub.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    [card addSubview:sub];
+
+    // 点一下面板就消失，方便看桌面
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:vc action:@selector(dismissSelf)];
+    [card addGestureRecognizer:tap];
+
+    win.hidden = NO;
+    gPanelWindow = win;
+
+    S1Write([NSString stringWithFormat:@"PANEL-SHOWN home=%@", S1HomeWindowInfo()]);
+}
+
+@interface UIViewController (S1Dismiss)
+- (void)dismissSelf;
 @end
 
-@implementation S1Button
-- (instancetype)initWithFrame:(CGRect)frame {
-    if ((self = [super initWithFrame:frame])) {
-        self.backgroundColor = [UIColor colorWithRed:0.20 green:0.52 blue:1.0 alpha:0.92];
-        self.layer.cornerRadius = CGRectGetWidth(frame) / 2.0;
-        self.layer.shadowColor = UIColor.blackColor.CGColor;
-        self.layer.shadowOpacity = 0.3;
-        self.layer.shadowRadius = 10;
-        self.layer.shadowOffset = CGSizeMake(0, 4);
-
-        UILabel *label = [[UILabel alloc] initWithFrame:self.bounds];
-        label.text = @"S1";
-        label.textAlignment = NSTextAlignmentCenter;
-        label.textColor = UIColor.whiteColor;
-        label.font = [UIFont systemFontOfSize:15 weight:UIFontWeightHeavy];
-        label.userInteractionEnabled = NO;
-        label.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [self addSubview:label];
-
-        UITapGestureRecognizer *tap =
-            [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(s1tapped)];
-        [self addGestureRecognizer:tap];
-    }
-    return self;
-}
-
-- (void)s1tapped {
-    S1Write(@"TAP-OK 按钮被点击 —— 注入 + UI + 事件 全部正常");
-    [UIView animateWithDuration:0.15 animations:^{
-        self.transform = CGAffineTransformMakeScale(0.85, 0.85);
-    } completion:^(BOOL finished) {
-        [UIView animateWithDuration:0.15 animations:^{
-            self.transform = CGAffineTransformIdentity;
-        }];
-    }];
+@implementation UIViewController (S1Dismiss)
+- (void)dismissSelf {
+    if (gPanelWindow) gPanelWindow.hidden = YES;
+    S1Write(@"panel tapped, hidden");
 }
 @end
-
-static S1Button *gButton = nil;
-
-static void S1Attach(void) {
-    // 已经挂上就只提到最前，不重复创建
-    if (gButton && gButton.window) {
-        [gButton.window bringSubviewToFront:gButton];
-        return;
-    }
-
-    if (gAttachAttempts >= kMaxAttachAttempts) {
-        S1Write([NSString stringWithFormat:@"放弃：尝试 %d 次仍没有可用窗口", gAttachAttempts]);
-        return;
-    }
-    gAttachAttempts++;
-
-    UIWindow *host = S1FindHostWindow();
-    if (!host) {
-        if (gAttachAttempts == 1 || gAttachAttempts % 10 == 0) {
-            S1Write([NSString stringWithFormat:@"第 %d 次：还没有可用窗口，1 秒后再试", gAttachAttempts]);
-        }
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ S1Attach(); });
-        return;
-    }
-
-    [gButton removeFromSuperview];
-
-    CGRect bounds = host.bounds;
-    if (CGRectIsEmpty(bounds)) bounds = [UIScreen mainScreen].bounds;
-    CGFloat size = 44;
-    S1Button *btn = [[S1Button alloc] initWithFrame:
-        CGRectMake(CGRectGetWidth(bounds) - size - 16,
-                   CGRectGetHeight(bounds) * 0.55,
-                   size, size)];
-    btn.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleTopMargin;
-    [host addSubview:btn];
-    [host bringSubviewToFront:btn];
-    gButton = btn;
-
-    S1Write([NSString stringWithFormat:@"ATTACH-OK 按钮已挂到 %@ (level=%.0f, %d 次尝试)",
-             NSStringFromClass([host class]), (double)host.windowLevel, gAttachAttempts]);
-}
 
 %hook SpringBoard
 - (void)applicationDidFinishLaunching:(id)application {
     %orig;
-    S1Write([NSString stringWithFormat:@"BOOT SpringBoard 已注入，iOS %@",
-             [[UIDevice currentDevice] systemVersion]]);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{ S1Attach(); });
+    S1Write([NSString stringWithFormat:@"BOOT injected, iOS %@", [[UIDevice currentDevice] systemVersion]]);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ S1ShowPanel(); });
 }
 %end
 
 %ctor {
     @autoreleasepool {
-        S1Write(@"LOAD dylib 已加载");
-        // 兜底：如果注入发生在 SpringBoard 启动之后，didFinishLaunching 不会再触发，
-        // 这条延时也会把按钮挂上。两条路径都幂等。
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ S1Attach(); });
+        S1Write(@"LOAD dylib loaded");
+        // 万一注入晚于 SpringBoard 启动，didFinishLaunching 不会再触发，这条兜底
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ S1ShowPanel(); });
     }
-    %init;   // 自定义 %ctor 时必须手动初始化默认组，否则 %hook 不生效
+    %init;
 }
