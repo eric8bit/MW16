@@ -1,8 +1,8 @@
 Package: com.mw16.stage4
 Name: MW16 Stage4 Window
-Version: 0.1.0
+Version: 0.2.0
 Architecture: iphoneos-arm64
-Description: Stage 4 - host a running app FBScene layers in a floating window.
+Description: Stage 4 v2 - scale scene content to fit, plus drag and resize.
 Maintainer: mw16
 Author: mw16
 Section: Tweaks
