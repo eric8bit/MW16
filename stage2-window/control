@@ -1,0 +1,9 @@
+Package: com.mw16.stage2
+Name: MW16 Stage2 Window
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Stage 2 - single floating window experiment with on-screen diagnostics.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)
