@@ -1,7 +1,7 @@
 export THEOS_PACKAGE_SCHEME = roothide
 # 只编 arm64：包架构会变成 iphoneos-arm64，装得更省事；
 # arm64e 设备跑 arm64 代码没问题。
-export ARCHS = arm64
+export ARCHS = arm64 arm64e
 export TARGET = iphone:clang:16.5:15.0
 export DEBUG = 0
 
