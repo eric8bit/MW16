@@ -128,6 +128,76 @@ static void CloseFloating(void) {
 - (void)hideSelf { CloseFloating(); }
 @end
 
+// ---------- 缩放：内容按全屏渲染，必须整体缩放才能完整放进窗口 ----------
+
+static void S5Refit(UIView *win, UIView *content) {
+    if (!win || !content) return;
+    CGRect area = CGRectMake(0, 26, win.bounds.size.width, win.bounds.size.height - 26);
+    if (area.size.width < 1 || area.size.height < 1) return;
+    CGRect sb = [UIScreen mainScreen].bounds;
+    if (sb.size.width < 1 || sb.size.height < 1) return;
+
+    CGFloat s = MIN(area.size.width / sb.size.width, area.size.height / sb.size.height);
+    content.transform = CGAffineTransformIdentity;
+    content.bounds = CGRectMake(0, 0, sb.size.width, sb.size.height);
+    content.center = CGPointMake(CGRectGetMidX(area), CGRectGetMidY(area));
+    content.transform = CGAffineTransformMakeScale(s, s);
+    content.autoresizingMask = UIViewAutoresizingNone;
+}
+
+@interface S5Drag : NSObject
+@property (nonatomic, weak) UIView *win;
+@property (nonatomic, weak) UIView *content;
+@property (nonatomic) CGPoint grab;
+@end
+
+@implementation S5Drag
+- (void)pan:(UIPanGestureRecognizer *)g {
+    UIView *win = self.win;
+    if (!win || !win.superview) return;
+    CGPoint p = [g locationInView:win.superview];
+    if (g.state == UIGestureRecognizerStateBegan) {
+        self.grab = CGPointMake(p.x - win.center.x, p.y - win.center.y);
+    } else if (g.state == UIGestureRecognizerStateChanged) {
+        win.center = CGPointMake(p.x - self.grab.x, p.y - self.grab.y);
+    }
+}
+@end
+
+@interface S5Resize : NSObject
+@property (nonatomic, weak) UIView *win;
+@property (nonatomic, weak) UIView *content;
+@property (nonatomic) CGRect startFrame;
+@property (nonatomic) CGPoint startPoint;
+@end
+
+@implementation S5Resize
+- (void)pan:(UIPanGestureRecognizer *)g {
+    UIView *win = self.win;
+    if (!win || !win.superview) return;
+
+    if (g.state == UIGestureRecognizerStateBegan) {
+        self.startFrame = win.frame;
+        self.startPoint = [g locationInView:win.superview];
+        return;
+    }
+    if (g.state != UIGestureRecognizerStateChanged) return;
+
+    CGPoint p = [g locationInView:win.superview];
+    CGFloat dx = p.x - self.startPoint.x;
+    CGFloat dy = p.y - self.startPoint.y;
+
+    CGRect f = self.startFrame;
+    CGRect sb = [UIScreen mainScreen].bounds;
+    CGFloat minW = 140.0, minH = 180.0;
+    f.size.width = MAX(minW, MIN(self.startFrame.size.width + dx, sb.size.width - f.origin.x - 4));
+    f.size.height = MAX(minH, MIN(self.startFrame.size.height + dy, sb.size.height - f.origin.y - 40));
+    win.frame = f;
+
+    S5Refit(win, self.content);
+}
+@end
+
 static void ShowFloating(UIView *cv, NSString *title) {
     CloseFloating();
 
@@ -162,13 +232,36 @@ static void ShowFloating(UIView *cv, NSString *title) {
     lbl.adjustsFontSizeToFitWidth = YES;
     [bar addSubview:lbl];
 
-    cv.frame = CGRectMake(0, 26, w, h - 26);
-    cv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [win addSubview:cv];
+
+    // 内容按全屏尺寸渲染，等比缩放进窗口区域，保证完整可见
+    S5Refit(win, cv);
+
+    // 标题栏拖动
+    S5Drag *drag = [S5Drag new];
+    drag.win = win;
+    drag.content = cv;
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:drag action:@selector(pan:)];
+    [bar addGestureRecognizer:pan];
+    objc_setAssociatedObject(win, "s5drag", drag, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 右下角缩放手柄
+    UIView *handle = [[UIView alloc] initWithFrame:CGRectMake(w - 26, h - 26, 22, 22)];
+    handle.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.22];
+    handle.layer.cornerRadius = 5;
+    handle.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleTopMargin;
+    [win addSubview:handle];
+
+    S5Resize *resize = [S5Resize new];
+    resize.win = win;
+    resize.content = cv;
+    UIPanGestureRecognizer *rpan = [[UIPanGestureRecognizer alloc] initWithTarget:resize action:@selector(pan:)];
+    [handle addGestureRecognizer:rpan];
+    objc_setAssociatedObject(win, "s5resize", resize, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     host.hidden = NO;
     gFloatWin = host;
-    A(@"浮窗已显示 %.0fx%.0f", w, h);
+    A(@"浮窗已显示 %.0fx%.0f（内容等比缩放）", w, h);
 }
 
 static UIView *BuildContainer(id scene, NSMutableString *r) {
