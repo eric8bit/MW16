@@ -1,0 +1,9 @@
+Package: com.mw16.stage1
+Name: MW16 Stage1 Hello
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Stage 1 environment check - draws a button on the home screen and logs. No system changes.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)

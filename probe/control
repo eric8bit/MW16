@@ -1,0 +1,9 @@
+Package: com.mw16.probe
+Name: MW16 Probe
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Runtime probe for iOS 16.6.1 split-window tweak development.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)

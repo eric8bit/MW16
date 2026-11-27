@@ -1,0 +1,9 @@
+Package: com.mw16.splitwin
+Name: MW16 Split Window
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: iPhone split-window / floating-window multitasking for iOS 16 (RootHide).
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)

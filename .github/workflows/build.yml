@@ -1,0 +1,114 @@
+name: Build MW16
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装系统依赖
+        run: |
+          set -x
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq make git curl xz-utils unzip fakeroot dpkg-dev \
+            libtinfo5 libncurses5 2>/dev/null || \
+          sudo apt-get install -y -qq make git curl xz-utils unzip fakeroot dpkg-dev libtinfo6 || true
+          dpkg --print-architecture
+
+      - name: 安装 roothide/theos
+        run: |
+          set -x
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)" || true
+          if [ ! -d "$HOME/theos/makefiles" ]; then
+            echo "::warning::install-theos 没跑成，改用 git clone"
+            rm -rf "$HOME/theos"
+            git clone --recursive --depth 1 https://github.com/roothide/theos.git "$HOME/theos"
+          fi
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+          ls "$HOME/theos" || true
+
+      - name: 确保有 iOS SDK
+        run: |
+          set -x
+          mkdir -p "$HOME/theos/sdks"
+          if [ -z "$(ls -A "$HOME/theos/sdks" 2>/dev/null)" ]; then
+            echo "::warning::theos 自带 SDK 为空，从 theos/sdks 补"
+            git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks || true
+            cp -R /tmp/sdks/*.sdk "$HOME/theos/sdks/" 2>/dev/null || true
+          fi
+          echo "--- 可用 SDK ---"
+          ls "$HOME/theos/sdks" || true
+          echo "--- 可用 toolchain ---"
+          ls "$HOME/theos/toolchain" 2>/dev/null || echo "(无，将使用系统 clang)"
+          which clang || true
+          clang --version || true
+
+      # ---- 关卡 1：Stage1 必须编过，编不过整个 job 失败 ----
+      - name: 编译 Stage1（最小验证包）
+        run: |
+          cd stage1-hello
+          make clean >/dev/null 2>&1 || true
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage1.log
+          exit ${PIPESTATUS[0]}
+
+      # ---- 下面两个允许失败，不影响 Stage1 的 deb 产出 ----
+      - name: 编译主插件（允许失败）
+        if: always()
+        continue-on-error: true
+        run: |
+          make clean >/dev/null 2>&1 || true
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee build.log
+          exit ${PIPESTATUS[0]}
+
+      - name: 编译探针（允许失败）
+        if: always()
+        continue-on-error: true
+        run: |
+          cd probe
+          make clean >/dev/null 2>&1 || true
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../probe.log
+          exit ${PIPESTATUS[0]}
+
+      - name: 检查产物
+        if: always()
+        run: |
+          echo "=== 所有 deb ==="
+          find . -name "*.deb" -print || true
+          echo
+          for d in $(find . -name "*.deb"); do
+            echo "--- $d ---"
+            dpkg-deb -I "$d" 2>/dev/null | head -20 || true
+            echo "文件列表:"
+            dpkg-deb -c "$d" 2>/dev/null | head -20 || true
+            echo
+          done
+
+      - name: 上传 deb
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MW16-debs
+          path: |
+            packages/*.deb
+            stage1-hello/packages/*.deb
+            probe/packages/*.deb
+          if-no-files-found: warn
+
+      - name: 上传编译日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            stage1.log
+            build.log
+            probe.log
+          if-no-files-found: ignore
