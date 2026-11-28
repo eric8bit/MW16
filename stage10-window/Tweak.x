@@ -491,7 +491,6 @@ static void HideMenu(void) {
 
 static void StartOpen(NSString *bid) {
     if (!bid.length) return;
-    HideMenu();
     StopPoll();
     if (!gOut) gOut = [NSMutableString string];
     if (!gFile) gFile = [NSMutableString string];
@@ -523,7 +522,10 @@ static void StartOpen(NSString *bid) {
             NSMutableString *r = [NSMutableString string];
             UIView *cv = BuildContainer(scene, r);
             A(@"build: %@ -> %@", r, cv ? @"OK" : @"FAIL");
-            if (cv) ShowFloating(cv, scene, bid);
+            if (cv) {
+                ShowFloating(cv, scene, bid);
+                HideMenu();     // 只有真正开出浮窗才收起菜单，失败时保留以便重试
+            }
             Flush();
             return;
         }
@@ -571,7 +573,7 @@ static void StartKeepAlive(void) {
     [super viewDidLoad];
 
     CGRect sb = [UIScreen mainScreen].bounds;
-    CGFloat w = MIN(320.0, sb.size.width - 24);
+    CGFloat w = MIN(320.0, sb.size.width - 10 - 76);
     CGFloat h = MIN(480.0, sb.size.height - 120);
 
     self.view.backgroundColor = [UIColor colorWithWhite:0.10 alpha:1.0];
@@ -593,7 +595,11 @@ static void StartKeepAlive(void) {
     refresh.frame = CGRectMake(w - 92, 6, 40, 28);
     [refresh setTitle:@"刷新" forState:UIControlStateNormal];
     refresh.titleLabel.font = [UIFont systemFontOfSize:12];
-    MWBlockTarget *rt = MakeTarget(^(id s) { [self reloadApps]; });
+    __weak typeof(self) weakSelf = self;
+    MWBlockTarget *rt = MakeTarget(^(id s) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        [strongSelf reloadApps];
+    });
     [refresh addTarget:rt action:@selector(fire:) forControlEvents:UIControlEventTouchUpInside];
     objc_setAssociatedObject(refresh, "t", rt, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [bar addSubview:refresh];
@@ -684,12 +690,22 @@ static void StartKeepAlive(void) {
 @end
 
 static void ShowMenu(void) {
-    if (gMenuWin) { gMenuWin.hidden = NO; return; }
+    if (gMenuWin) {
+        gMenuWin.hidden = NO;
+        // 若上次没读出来（比如刚重启），重新拉一次
+        UIViewController *vc = gMenuWin.rootViewController;
+        if (vc && [vc respondsToSelector:@selector(reloadApps)]) {
+            @try { ((void (*)(id, SEL))objc_msgSend)(vc, @selector(reloadApps)); }
+            @catch (NSException *e) {}
+        }
+        return;
+    }
 
     CGRect sb = [UIScreen mainScreen].bounds;
-    CGFloat w = MIN(320.0, sb.size.width - 24);
+    // 左侧留 10，右侧给圆点留 76，保证菜单不盖住圆点
+    CGFloat w = MIN(320.0, sb.size.width - 10 - 76);
     CGFloat h = MIN(480.0, sb.size.height - 120);
-    CGFloat x = (sb.size.width - w) / 2.0;
+    CGFloat x = 10;
     CGFloat y = MAX(70.0, (sb.size.height - h) / 2.0 - 30);
 
     UIWindow *win = NewWindow(CGRectMake(x, y, w, h), UIWindowLevelAlert + 880);
