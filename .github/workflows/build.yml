@@ -37,12 +37,12 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version || true
           clang --version || true
 
-      - name: 编译 Stage20
+      - name: 编译 Stage21
         run: |
           set -o pipefail
-          cd stage20-window
+          cd stage21-window
           make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage20.log
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage21.log
 
       - name: 检查产物
         if: always()
@@ -60,7 +60,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MW16-debs
-          path: stage20-window/packages/*.deb
+          path: stage21-window/packages/*.deb
           if-no-files-found: warn
 
       - name: 上传日志
@@ -68,5 +68,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: stage20.log
+          path: stage21.log
           if-no-files-found: ignore
