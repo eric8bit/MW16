@@ -1,0 +1,9 @@
+Package: com.mw16.stage8
+Name: MW16 Stage8 Window
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Stage 8 - append-only logging, deferred RBS assertion, RBS availability report.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)
