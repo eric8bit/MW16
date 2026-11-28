@@ -23,6 +23,9 @@ static int gPollCount = 0;
 
 static NSMutableArray *gWindows = nil;
 static NSMutableDictionary *gAssertions = nil;
+// 容器缓存：bid -> ctx。关窗只隐藏不销毁，
+// 因为同一个 layer 只能被一个容器 host，重建必然失败。
+static NSMutableDictionary *gCache = nil;
 
 static id LogLock(void) {
     static dispatch_once_t once;
@@ -316,13 +319,11 @@ static void CloseOne(NSDictionary *ctx) {
     [gWindows removeObject:ctx];
     UIWindow *w = ctx[@"win"];
     w.hidden = YES;
+    // 故意保留 gCache 和 RBS 断言：
+    //   - 容器不能重建（layer 已被它 host）
+    //   - 不断言，App 会被挂起，下次还得等冷启动
     NSString *bid = ctx[@"bid"];
-    BOOL still = NO;
-    for (NSDictionary *d in gWindows) {
-        if ([d[@"bid"] isEqualToString:bid]) { still = YES; break; }
-    }
-    if (!still) ReleaseAssertion(bid);
-    A(@"关闭浮窗 %@（剩 %lu）", bid, (unsigned long)gWindows.count);
+    A(@"关闭浮窗 %@（剩 %lu，已缓存可秒开）", bid, (unsigned long)gWindows.count);
     FlushAsync();
 }
 
@@ -369,6 +370,18 @@ static UIView *BuildContainer(id scene, NSMutableString *r) {
 }
 
 static void ShowFloating(UIView *content, id scene, NSString *bid) {
+    if (!gCache) gCache = [NSMutableDictionary dictionary];
+
+    // 已有同 App 的浮窗：直接复用，不重建容器
+    NSMutableDictionary *cached = gCache[bid];
+    if (cached) {
+        UIWindow *w = cached[@"win"];
+        w.hidden = NO;
+        if (![gWindows containsObject:cached]) [gWindows addObject:cached];
+        A(@"复用已有浮窗 %@", bid);
+        return;
+    }
+
     CGRect sb = [UIScreen mainScreen].bounds;
     NSInteger n = (NSInteger)gWindows.count;
 
@@ -481,6 +494,8 @@ static void ShowFloating(UIView *content, id scene, NSString *bid) {
 
     win.hidden = NO;
     [gWindows addObject:ctx];
+    if (!gCache) gCache = [NSMutableDictionary dictionary];
+    gCache[bid] = ctx;
     A(@"浮窗 %lu 已开 %@ (%.0fx%.0f)", (unsigned long)gWindows.count, bid, w, h);
 }
 
@@ -503,6 +518,23 @@ static void HideMenu(void) {
 static void StartOpen(NSString *bid) {
     if (!bid.length) return;
     StopPoll();
+
+    // 秒开路径：之前开过这个 App，容器还在，直接显示
+    if (!gCache) gCache = [NSMutableDictionary dictionary];
+    NSMutableDictionary *hits = gCache[bid];
+    if (hits) {
+        UIWindow *ww = hits[@"win"];
+        ww.hidden = NO;
+        if (![gWindows containsObject:hits]) [gWindows addObject:hits];
+        // 场景若还活着，立刻恢复前台
+        id sc = SceneForBundle(bid);
+        if (sc) ForceForeground(sc);
+        if (PidOf(bid) > 0) AcquireAssertion(bid);
+        HideMenu();
+        A(@"秒开（复用缓存）%@", bid);
+        FlushAsync();
+        return;
+    }
     @synchronized (LogLock()) {
         if (!gOut) gOut = [NSMutableString string];
         if (!gFile) gFile = [NSMutableString string];
@@ -517,7 +549,7 @@ static void StartOpen(NSString *bid) {
 
     gPoll = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
     dispatch_source_set_timer(gPoll, dispatch_time(DISPATCH_TIME_NOW, 0),
-                              400 * NSEC_PER_MSEC, 50 * NSEC_PER_MSEC);
+                              150 * NSEC_PER_MSEC, 30 * NSEC_PER_MSEC);
     dispatch_source_set_event_handler(gPoll, ^{
         gPollCount++;
         id scene = SceneForBundle(bid);
@@ -525,7 +557,7 @@ static void StartOpen(NSString *bid) {
         int pid = PidOf(bid);
         if (pid > 0) AcquireAssertion(bid);
 
-        if (gPollCount % 5 == 1) {
+        if (gPollCount % 20 == 1) {
             A(@"[%d] scene=%@ layers=%lu pid=%d rbs=%d", gPollCount, scene ? @"Y" : @"N",
               (unsigned long)ls.count, pid, gAssertions[bid] ? 1 : 0);
         }
@@ -543,9 +575,9 @@ static void StartOpen(NSString *bid) {
             return;
         }
 
-        if (gPollCount >= 60) {
+        if (gPollCount >= 200) {   // 200 * 150ms = 30s
             StopPoll();
-            A(@"超时 24s：没拿到图层");
+            A(@"超时 30s：没拿到图层");
             Flush();
         }
     });
