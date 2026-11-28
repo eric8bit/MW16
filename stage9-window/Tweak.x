@@ -446,6 +446,9 @@ static void LaunchApp(NSString *bid) {
         @catch (NSException *e) {}
 }
 
+static void EnsureDot(void);
+static void ShowPanel(void);
+
 static void StopPoll(void) {
     if (gPoll) { dispatch_source_cancel(gPoll); gPoll = nil; }
 }
