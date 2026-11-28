@@ -1,0 +1,9 @@
+Package: com.mw16.stage13
+Name: MW16 Stage13 Window
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Stage 13 - no drag jitter, instant placeholder, auto-close on app switcher.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)
