@@ -1,0 +1,9 @@
+Package: com.mw16.stage12
+Name: MW16 Stage12 Window
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Stage 12 - device-like frame without letterboxing, better scene matching.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)
