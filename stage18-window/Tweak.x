@@ -791,7 +791,7 @@ static NSMutableDictionary *CreateFloatingShell(NSString *bid) {
     ph.textAlignment = NSTextAlignmentCenter;
     ph.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
     ph.font = [UIFont systemFontOfSize:12];
-    ph.center = CGPointMake((w - 12) / 2.0, (h - 12) / 2.0);
+    ph.center = CGPointMake(cw / 2.0, ch / 2.0);   // 居中在内容区，不是整窗
     ph.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin |
                           UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     [screen addSubview:ph];
@@ -799,7 +799,7 @@ static NSMutableDictionary *CreateFloatingShell(NSString *bid) {
 
     UIActivityIndicatorView *sp = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     sp.color = [UIColor colorWithWhite:0.75 alpha:1.0];
-    sp.center = CGPointMake((w - 12) / 2.0, (h - 12) / 2.0 - 34);
+    sp.center = CGPointMake(cw / 2.0, ch / 2.0 - 34);
     sp.autoresizingMask = ph.autoresizingMask;
     [sp startAnimating];
     [screen addSubview:sp];
