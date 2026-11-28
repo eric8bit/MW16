@@ -1,0 +1,9 @@
+Package: com.mw16.stage10
+Name: MW16 Stage10 Window
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Stage 10 - small app menu window, tap an app to open it in a floating window.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)
