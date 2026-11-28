@@ -763,28 +763,3 @@ static void ShowPanel(void) {
     });
     %init;
 }
-%hook SpringBoard
-- (void)applicationDidFinishLaunching:(id)application {
-    %orig;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        if (!gWindows) gWindows = [NSMutableArray array];
-        if (!gAssertions) gAssertions = [NSMutableDictionary dictionary];
-        StartKeepAlive();
-        EnsureDot();
-        ShowPanel();
-    });
-}
-%end
-
-%ctor {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        if (!gWindows) gWindows = [NSMutableArray array];
-        if (!gAssertions) gAssertions = [NSMutableDictionary dictionary];
-        StartKeepAlive();
-        EnsureDot();
-        if (!gPanelWin) ShowPanel();
-    });
-    %init;
-}
