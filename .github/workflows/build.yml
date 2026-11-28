@@ -198,6 +198,16 @@ jobs:
           make clean >/dev/null 2>&1 || true
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage13.log
 
+      # ---------------- Stage 14 ----------------
+      - name: 编译 Stage14（允许失败）
+        if: always()
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cd stage14-window
+          make clean >/dev/null 2>&1 || true
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage14.log
+
       - name: 检查产物（架构是否真的含 arm64e）
         if: always()
         run: |
@@ -239,6 +249,7 @@ jobs:
             stage11-window/packages/*.deb
             stage12-window/packages/*.deb
             stage13-window/packages/*.deb
+            stage14-window/packages/*.deb
           if-no-files-found: warn
 
       - name: 上传日志
@@ -262,4 +273,5 @@ jobs:
             stage11.log
             stage12.log
             stage13.log
+            stage14.log
           if-no-files-found: ignore
