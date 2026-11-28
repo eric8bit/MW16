@@ -14,6 +14,7 @@
 
 static NSMutableString *gOut = nil;
 static NSMutableString *gFile = nil;
+static id gLogLock = nil;   // 全局锁对象（C 函数里不能用 self）
 static UIWindow *gMenuWin = nil;
 static UIWindow *gDotWin = nil;
 static dispatch_source_t gPoll = nil;
@@ -23,12 +24,18 @@ static int gPollCount = 0;
 static NSMutableArray *gWindows = nil;
 static NSMutableDictionary *gAssertions = nil;
 
+static id LogLock(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ gLogLock = [NSObject new]; });
+    return gLogLock;
+}
+
 static void A(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
     va_end(ap);
     // 应用列表在后台队列扫，日志缓冲可能被多线程同时写，必须加锁
-    @synchronized (self) {
+    @synchronized (LogLock()) {
         if (!gOut) gOut = [NSMutableString string];
         if (!gFile) gFile = [NSMutableString string];
         [gOut appendFormat:@"%@\n", s];
@@ -41,7 +48,7 @@ static void A(NSString *fmt, ...) {
 
 static void Flush(void) {
     NSString *s = nil;
-    @synchronized (self) { s = [gFile copy] ?: @""; }
+    @synchronized (LogLock()) { s = [gFile copy] ?: @""; }
     if (!s.length) return;
     @try { [s writeToFile:S10_LOG atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
     @catch (NSException *e) {}
@@ -496,7 +503,7 @@ static void HideMenu(void) {
 static void StartOpen(NSString *bid) {
     if (!bid.length) return;
     StopPoll();
-    @synchronized (self) {
+    @synchronized (LogLock()) {
         if (!gOut) gOut = [NSMutableString string];
         if (!gFile) gFile = [NSMutableString string];
         [gOut setString:@""];
