@@ -501,16 +501,16 @@ static void ShowFloating(UIView *content, id scene, NSString *bid) {
 
     // 刚开出来时 App 还没完全回到前台，触摸会迟钝。
     // 连续 10 次（约 1.5s）补推前台，让它尽快可交互。
-    __block int n = 0;
+    __block int warmTicks = 0;
     __block dispatch_source_t warm = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
                                                             dispatch_get_main_queue());
     dispatch_source_set_timer(warm, dispatch_time(DISPATCH_TIME_NOW, 0),
                               150 * NSEC_PER_MSEC, 30 * NSEC_PER_MSEC);
     dispatch_source_set_event_handler(warm, ^{
-        n++;
-        id sc = SceneForBundle(bid);
-        if (sc) ForceForeground(sc);
-        if (n >= 10) dispatch_source_cancel(warm);
+        warmTicks++;
+        id sc2 = SceneForBundle(bid);
+        if (sc2) ForceForeground(sc2);
+        if (warmTicks >= 10) dispatch_source_cancel(warm);
     });
     dispatch_resume(warm);
 }
