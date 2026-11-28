@@ -27,17 +27,21 @@ static void A(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
     va_end(ap);
-    if (!gOut) gOut = [NSMutableString string];
-    if (!gFile) gFile = [NSMutableString string];
-    [gOut appendFormat:@"%@\n", s];
-    [gFile appendFormat:@"%@\n", s];
-    if (gFile.length > 60000) [gFile deleteCharactersInRange:NSMakeRange(0, 20000)];
-    if (gOut.length > 20000) [gOut deleteCharactersInRange:NSMakeRange(0, 8000)];
+    // 应用列表在后台队列扫，日志缓冲可能被多线程同时写，必须加锁
+    @synchronized (self) {
+        if (!gOut) gOut = [NSMutableString string];
+        if (!gFile) gFile = [NSMutableString string];
+        [gOut appendFormat:@"%@\n", s];
+        [gFile appendFormat:@"%@\n", s];
+        if (gFile.length > 60000) [gFile deleteCharactersInRange:NSMakeRange(0, 20000)];
+        if (gOut.length > 20000) [gOut deleteCharactersInRange:NSMakeRange(0, 8000)];
+    }
     NSLog(@"[MW16-S10] %@", s);
 }
 
 static void Flush(void) {
-    NSString *s = gFile ?: @"";
+    NSString *s = nil;
+    @synchronized (self) { s = [gFile copy] ?: @""; }
     if (!s.length) return;
     @try { [s writeToFile:S10_LOG atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
     @catch (NSException *e) {}
@@ -492,10 +496,12 @@ static void HideMenu(void) {
 static void StartOpen(NSString *bid) {
     if (!bid.length) return;
     StopPoll();
-    if (!gOut) gOut = [NSMutableString string];
-    if (!gFile) gFile = [NSMutableString string];
-    [gOut setString:@""];
-    [gFile setString:@""];
+    @synchronized (self) {
+        if (!gOut) gOut = [NSMutableString string];
+        if (!gFile) gFile = [NSMutableString string];
+        [gOut setString:@""];
+        [gFile setString:@""];
+    }
     gPollCount = 0;
     A(@"打开 %@", bid);
     Flush();
