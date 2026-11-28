@@ -1,0 +1,9 @@
+Package: com.mw16.stage18
+Name: MW16 Stage18 Window
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Stage 18 - wider 2.05 aspect, arc handle hugging the corner, touch only on the arc.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)
