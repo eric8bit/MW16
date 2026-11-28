@@ -14,7 +14,6 @@
 
 static NSMutableString *gOut = nil;
 static NSMutableString *gFile = nil;
-static UITextView *gTrace = nil;
 static UIWindow *gMenuWin = nil;
 static UIWindow *gDotWin = nil;
 static dispatch_source_t gPoll = nil;
@@ -159,11 +158,16 @@ static NSArray *InstalledApps(void) {
         }
 
         if (!bid.length) continue;
-        if ([bid hasPrefix:@"com.apple."]) continue;   // 系统 App 不列
-        [out addObject:@{@"bid": bid, @"name": (name.length ? name : bid)}];
+        BOOL sys = [bid hasPrefix:@"com.apple."];
+        [out addObject:@{@"bid": bid,
+                         @"name": (name.length ? name : bid),
+                         @"sys": @(sys)}];
     }
 
+    // 第三方在前，系统在后；同组按名字排
     [out sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        BOOL sa = [a[@"sys"] boolValue], sb = [b[@"sys"] boolValue];
+        if (sa != sb) return sa ? NSOrderedDescending : NSOrderedAscending;
         return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];
     }];
     A(@"读到 %lu 个应用", (unsigned long)out.count);
@@ -413,7 +417,8 @@ static void ShowFloating(UIView *content, id scene, NSString *bid) {
     FitContent(area, content);
 
     __block CGPoint grab = CGPointZero;
-    MWBlockTarget *panT = MakeTarget(^(UIPanGestureRecognizer *g) {
+    MWBlockTarget *panT = MakeTarget(^(id sender) {
+        UIPanGestureRecognizer *g = (UIPanGestureRecognizer *)sender;
         CGPoint p = [g locationInView:nil];
         if (g.state == UIGestureRecognizerStateBegan) {
             grab = CGPointMake(p.x - win.frame.origin.x, p.y - win.frame.origin.y);
@@ -438,7 +443,8 @@ static void ShowFloating(UIView *content, id scene, NSString *bid) {
 
     __block CGRect startF = CGRectZero;
     __block CGPoint startP = CGPointZero;
-    MWBlockTarget *rpT = MakeTarget(^(UIPanGestureRecognizer *g) {
+    MWBlockTarget *rpT = MakeTarget(^(id sender) {
+        UIPanGestureRecognizer *g = (UIPanGestureRecognizer *)sender;
         CGPoint p = [g locationInView:nil];
         if (g.state == UIGestureRecognizerStateBegan) {
             startF = win.frame;
@@ -623,11 +629,19 @@ static void StartKeepAlive(void) {
 }
 
 - (void)reloadApps {
-    NSArray *list = InstalledApps();
-    self.apps = list ?: @[];
-    [self.table reloadData];
-    self.hint.text = [NSString stringWithFormat:@"共 %lu 个应用 · 点名字开浮窗",
-                      (unsigned long)self.apps.count];
+    self.hint.text = @"正在读取应用列表...";
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSArray *list = InstalledApps();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) self2 = weakSelf;
+            if (!self2) return;
+            self2.apps = list ?: @[];
+            [self2.table reloadData];
+            self2.hint.text = [NSString stringWithFormat:@"共 %lu 个应用 · 点名字开浮窗",
+                               (unsigned long)self2.apps.count];
+        });
+    });
 }
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)section {
@@ -652,8 +666,10 @@ static void StartKeepAlive(void) {
 
     if ((NSUInteger)indexPath.row >= self.apps.count) return cell;
     NSDictionary *d = self.apps[indexPath.row];
-    cell.textLabel.text = d[@"name"];
+    BOOL sys = [d[@"sys"] boolValue];
+    cell.textLabel.text = sys ? [NSString stringWithFormat:@"%@（系统）", d[@"name"]] : d[@"name"];
     cell.detailTextLabel.text = d[@"bid"];
+    cell.textLabel.textColor = sys ? [UIColor colorWithWhite:0.65 alpha:1.0] : UIColor.whiteColor;
     return cell;
 }
 
@@ -725,7 +741,8 @@ static void EnsureDot(void) {
     objc_setAssociatedObject(dot, "tap", tapT, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     __block CGPoint grab = CGPointZero;
-    MWBlockTarget *panT = MakeTarget(^(UIPanGestureRecognizer *g) {
+    MWBlockTarget *panT = MakeTarget(^(id sender) {
+        UIPanGestureRecognizer *g = (UIPanGestureRecognizer *)sender;
         CGPoint p = [g locationInView:nil];
         if (g.state == UIGestureRecognizerStateBegan) {
             grab = CGPointMake(p.x - w.frame.origin.x, p.y - w.frame.origin.y);
