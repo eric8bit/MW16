@@ -2,7 +2,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-// MW16 Stage 7
+// MW16 Stage 6
 //
 //  v5 结论：
 //    - 点击有反应  → 触摸链路本来就是通的，不用额外处理
@@ -34,7 +34,7 @@ static void A(NSString *fmt, ...) {
     va_end(ap);
     if (!gOut) gOut = [NSMutableString string];
     [gOut appendFormat:@"%@\n", s];
-    NSLog(@"[MW16-S7] %@", s);
+    NSLog(@"[MW16-S6] %@", s);
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gTrace) {
             gTrace.text = gOut;
@@ -253,8 +253,8 @@ static void ShowPanel(void);
 
 // ---------- 触摸穿透 ----------
 //
-//  v6 的致命问题：全屏的 UIWindow 的 root view 是个普通 UIView，
-//  它把整个屏幕的触摸全吃了 → 主屏点不动，浮窗外也点不动。
+//  问题：全屏 UIWindow 的 root view 是普通 UIView，会吃掉整个屏幕的触摸，
+//  导致主屏、浮窗外的区域全部点不动。
 //
 //  修法：root view 只把触摸交给真正命中的子视图，其余返回 nil，
 //  事件继续往下传给 SpringBoard。
@@ -745,3 +745,46 @@ static void ShowPanel(void) {
                    dispatch_get_main_queue(), ^{
         if (!gWindows) gWindows = [NSMutableArray array];
         if (!gAssertions) gAssertions = [NSMutableDictionary dictionary];
+        StartKeepAlive();
+        EnsureDot();
+        ShowPanel();
+    });
+}
+%end
+
+%ctor {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!gWindows) gWindows = [NSMutableArray array];
+        if (!gAssertions) gAssertions = [NSMutableDictionary dictionary];
+        StartKeepAlive();
+        EnsureDot();
+        if (!gPanelWin) ShowPanel();
+    });
+    %init;
+}
+%hook SpringBoard
+- (void)applicationDidFinishLaunching:(id)application {
+    %orig;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!gWindows) gWindows = [NSMutableArray array];
+        if (!gAssertions) gAssertions = [NSMutableDictionary dictionary];
+        StartKeepAlive();
+        EnsureDot();
+        ShowPanel();
+    });
+}
+%end
+
+%ctor {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!gWindows) gWindows = [NSMutableArray array];
+        if (!gAssertions) gAssertions = [NSMutableDictionary dictionary];
+        StartKeepAlive();
+        EnsureDot();
+        if (!gPanelWin) ShowPanel();
+    });
+    %init;
+}
