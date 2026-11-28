@@ -1,0 +1,9 @@
+Package: com.mw16.stage7
+Name: MW16 Stage7 Window
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Stage 7 - passthrough touch windows so the home screen stays usable.
+Maintainer: mw16
+Author: mw16
+Section: Tweaks
+Depends: firmware (>= 15.0)
