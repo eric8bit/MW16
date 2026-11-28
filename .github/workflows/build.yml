@@ -3,259 +3,56 @@ name: Build MW16
 on:
   push:
     branches: [ main, master ]
-  pull_request:
   workflow_dispatch:
 
 jobs:
   build:
-    # 必须用 macOS runner：arm64e 的 ABI 只有 Apple 的 clang 才能生成正确版本，
-    # 在 Ubuntu 上用系统 clang 编出来的 arm64e 会因指针认证 ABI 不匹配在真机上崩溃。
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
-
-      - name: 环境信息
-        run: |
-          set -x
-          sw_vers
-          xcode-select -p
-          clang --version
-          xcrun --sdk iphoneos --show-sdk-path || true
 
       - name: 安装 roothide/theos
         run: |
           set -x
           bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)" || true
           if [ ! -d "$HOME/theos/makefiles" ]; then
-            echo "::warning::install-theos 失败，改用 git clone"
+            echo "::warning::install-theos 没跑成，改用 git clone"
             rm -rf "$HOME/theos"
             git clone --recursive --depth 1 https://github.com/roothide/theos.git "$HOME/theos"
           fi
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
-          ls "$HOME/theos"
+          ls "$HOME/theos" || true
 
-      - name: 准备 SDK
+      - name: 确保有 iOS SDK
         run: |
           set -x
           mkdir -p "$HOME/theos/sdks"
-          if [ -z "$(ls -A "$HOME/theos/sdks" 2>/dev/null | grep -v .keep)" ]; then
-            echo "::warning::theos 没带 SDK，从 theos/sdks 补"
+          if [ -z "$(ls -A "$HOME/theos/sdks" 2>/dev/null)" ]; then
             git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks || true
             cp -R /tmp/sdks/*.sdk "$HOME/theos/sdks/" 2>/dev/null || true
           fi
-          echo "--- 可用 SDK ---"
-          ls "$HOME/theos/sdks"
-          echo "--- theos toolchain ---"
-          ls "$HOME/theos/toolchain" 2>/dev/null || echo "(无，用 Xcode 的 clang)"
+          ls "$HOME/theos/sdks" || true
+          xcrun --sdk iphoneos --show-sdk-version || true
+          clang --version || true
 
-      # ---------------- Stage 1 ----------------
-      - name: 编译 Stage1（失败则整体失败）
+      - name: 编译 Stage18
         run: |
           set -o pipefail
-          cd stage1-hello
+          cd stage18-window
           make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage1.log
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage18.log
 
-      # ---------------- 探针 ----------------
-      - name: 编译探针（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd probe
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../probe.log
-
-      # ---------------- 主插件 ----------------
-      - name: 编译主插件（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee build.log
-
-      # ---------------- 产物检查 ----------------
-      # ---------------- Stage 2 ----------------
-      - name: 编译 Stage2（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage2-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage2.log
-
-      # ---------------- Stage 3 ----------------
-      - name: 编译 Stage3（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage3-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage3.log
-
-      # ---------------- Stage 4 ----------------
-      - name: 编译 Stage4（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage4-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage4.log
-
-      # ---------------- Stage 5 ----------------
-      - name: 编译 Stage5（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage5-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage5.log
-
-      # ---------------- Stage 6 ----------------
-      - name: 编译 Stage6（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage6-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage6.log
-
-      # ---------------- Stage 7 ----------------
-      - name: 编译 Stage7（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage7-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage7.log
-
-      # ---------------- Stage 8 ----------------
-      - name: 编译 Stage8（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage8-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage8.log
-
-      # ---------------- Stage 9 ----------------
-      - name: 编译 Stage9（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage9-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage9.log
-
-      # ---------------- Stage 10 ----------------
-      - name: 编译 Stage10（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage10-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage10.log
-
-      # ---------------- Stage 11 ----------------
-      - name: 编译 Stage11（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage11-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage11.log
-
-      # ---------------- Stage 12 ----------------
-      - name: 编译 Stage12（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage12-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage12.log
-
-      # ---------------- Stage 13 ----------------
-      - name: 编译 Stage13（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage13-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage13.log
-
-      # ---------------- Stage 14 ----------------
-      - name: 编译 Stage14（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage14-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage14.log
-
-      # ---------------- Stage 15 ----------------
-      - name: 编译 Stage15（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage15-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage15.log
-
-      # ---------------- Stage 16 ----------------
-      - name: 编译 Stage16（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage16-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage16.log
-
-      # ---------------- Stage 17 ----------------
-      - name: 编译 Stage17（允许失败）
-        if: always()
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd stage17-window
-          make clean >/dev/null 2>&1 || true
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tee ../stage17.log
-
-      - name: 检查产物（架构是否真的含 arm64e）
+      - name: 检查产物
         if: always()
         run: |
-          echo "=== 找到的 deb ==="
+          echo "=== deb ==="
           find . -name "*.deb" -print || true
           echo
-          for d in $(find . -name "*.deb"); do
-            echo "--- $d ---"
-            # macOS runner 没有 dpkg-deb，用 ar 拆包看 control
-            cd "$(dirname "$d")"
-            ar -x "$(basename "$d")" 2>/dev/null && ls -1 | head || true
-            cd - >/dev/null
-          done
-          echo
-          echo "=== 检查 dylib 架构 ==="
           for f in $(find . -name "*.dylib" -path "*obj*" 2>/dev/null); do
             echo "--- $f ---"
-            xcrun lipo -info "$f" 2>/dev/null || lipo -info "$f" 2>/dev/null || file "$f"
+            xcrun lipo -info "$f" 2>/dev/null || file "$f"
           done
 
       - name: 上传 deb
@@ -263,26 +60,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MW16-debs
-          path: |
-            packages/*.deb
-            stage1-hello/packages/*.deb
-            probe/packages/*.deb
-            stage2-window/packages/*.deb
-            stage3-window/packages/*.deb
-            stage4-window/packages/*.deb
-            stage5-window/packages/*.deb
-            stage6-window/packages/*.deb
-            stage7-window/packages/*.deb
-            stage8-window/packages/*.deb
-            stage9-window/packages/*.deb
-            stage10-window/packages/*.deb
-            stage11-window/packages/*.deb
-            stage12-window/packages/*.deb
-            stage13-window/packages/*.deb
-            stage14-window/packages/*.deb
-            stage15-window/packages/*.deb
-            stage16-window/packages/*.deb
-            stage17-window/packages/*.deb
+          path: stage18-window/packages/*.deb
           if-no-files-found: warn
 
       - name: 上传日志
@@ -290,24 +68,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: |
-            stage1.log
-            build.log
-            probe.log
-            stage2.log
-            stage3.log
-            stage4.log
-            stage5.log
-            stage6.log
-            stage7.log
-            stage8.log
-            stage9.log
-            stage10.log
-            stage11.log
-            stage12.log
-            stage13.log
-            stage14.log
-            stage15.log
-            stage16.log
-            stage17.log
+          path: stage18.log
           if-no-files-found: ignore
